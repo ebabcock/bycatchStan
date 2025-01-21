@@ -710,9 +710,12 @@ bycatchStanSim <- function(setupObj,
 }
 
 
+getMeanNbinom<-function(SampleUnits,MeanVals,phiVals) {
+  sum(rnbinom(SampleUnits,mu=MeanVals/SampleUnits,size=phiVals))
+}
 
 #Function to calculate total bycatch from one stan model object
-#simulating the catches in R not stan
+#simulating the catches in R not stan, with prediction interval
 getBycatchSim <- function(mod1,
                           logdat,
                           matrixAll,
@@ -721,10 +724,9 @@ getBycatchSim <- function(mod1,
                           nsim = 1000) {
   b0vals <- extract(mod1, pars = "b0")$b0
   subsetval <- sample(1:length(b0vals), nsim)
-  if (ncol(matrixAll) > 1)
-    bvals <- extract(mod1, pars = "b")$b
-  else
-    bvals <- NULL
+  if(ncol(matrixAll) > 1)
+    bvals <- extract(mod1, pars = "b")$b else
+      bvals <- NULL
   b0vals <- b0vals[subsetval]
   bvals <- bvals[subsetval, ]
   bvals <- cbind(b0vals, bvals)
@@ -732,21 +734,26 @@ getBycatchSim <- function(mod1,
   simMean <- exp(matrixAll %*% t(bvals))
   EffortMean <- rep(logdat$Effort, nsim)
   EffortMean[EffortMean < 0.01] <- 0.01
-  if (modeledEffort) {
+  if(modeledEffort) {
     EffortSD <- rep(unlist(logdat[, effortSD]), nsim)
-    Effort <- rnorm(n = prod(dim(simMean)), EffortMean, EffortSD)
+    Effort <- rnorm(n = prod(dim(simMean)), EffortMean, EffortSD)  #Check this
     Effort[Effort < 0.0001] <- 0.0001
   } else {
     Effort <- EffortMean
   }
-  simVal <- rnbinom(
-    n = prod(dim(simMean)),
-    mu = as.vector(simMean) * Effort,
-    size = rep(phivals, each = ncol(matrixAll))
-  )
+  simVal<-data.frame(SampleUnits=rep(logdat$SampleUnits,nsim),
+                     MeanVals=as.vector(simMean) * Effort,
+                     phiVals=rep(phivals, each = nrow(logdat))) %>%
+    rowwise() %>%
+    mutate(Bycatch=getMeanNbinom(SampleUnits,MeanVals,phiVals))
+  # simVal <- rnbinom(
+  #   n = prod(dim(simMean)),
+  #   mu = as.vector(simMean) * Effort,
+  #   size = rep(phivals, each = nrow(logdat))
+  # )
   gg1 <- data.frame(
-    simVal = simVal,
-    row = rep(1:nrow(logdat)),
+    simVal = simVal$Bycatch,
+    row = rep(1:nrow(logdat),nsim),
     iterations = rep(1:nsim, each = nrow(logdat))
   )
   gg1$Year <- logdat$Year1[gg1$row]
