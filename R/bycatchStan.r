@@ -709,13 +709,16 @@ bycatchStanSim <- function(setupObj,
   return(returnVal)
 }
 
-
+#Function for a random draw of size SampleUnits, summed to get
+#the stratum estimate. 
 getMeanNbinom<-function(SampleUnits,MeanVals,phiVals) {
-  sum(rnbinom(SampleUnits,mu=MeanVals/SampleUnits,size=phiVals))
+  if(SampleUnits>0 & !is.na(SampleUnits) & !is.na(MeanVals))
+    return<- sum(rnbinom(SampleUnits,mu=MeanVals/SampleUnits,size=phiVals)) else
+      return<-0
+    return
 }
-
 #Function to calculate total bycatch from one stan model object
-#simulating the catches in R not stan, with prediction interval
+#simulating the catches in R not stan, with prediction interval generated with GetMeanNbinom
 getBycatchSim <- function(mod1,
                           logdat,
                           matrixAll,
