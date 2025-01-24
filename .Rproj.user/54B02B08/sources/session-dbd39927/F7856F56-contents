@@ -1,0 +1,2 @@
+library(tidyverse)
+x<-rnorm(10)
