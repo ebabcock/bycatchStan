@@ -588,6 +588,7 @@ bycatchStanSim <- function(setupObj,
                            stanModel = "nbinom2",
                            modeledEffort = FALSE,
                            effortSD = NULL,
+                           predictionInterval=TRUE,
                            outDir = NULL) {
   if (is.null(effortSD) & modeledEffort)      stop("Must supply the name of the effortSD column if using estimated effort")
   require(rstan)
@@ -681,7 +682,8 @@ bycatchStanSim <- function(setupObj,
       logdat = logdat,
       matrixAll = matrixAll[[i]],
       modeledEffort = modeledEffort,
-      effortSD = effortSD
+      effortSD = effortSD,
+      predictionInterval=predictionInterval,
     )
     names(modelYearSum)[i] <- modelsToRun[i]
     if (modelsToRun[i] == "y~1")
@@ -724,6 +726,7 @@ getBycatchSim <- function(mod1,
                           matrixAll,
                           modeledEffort = FALSE,
                           effortSD = NULL,
+                          predictionInterval=predictionInterval,
                           nsim = 1000) {
   b0vals <- extract(mod1, pars = "b0")$b0
   subsetval <- sample(1:length(b0vals), nsim)
@@ -744,11 +747,15 @@ getBycatchSim <- function(mod1,
   } else {
     Effort <- EffortMean
   }
+  if(predictionInterval) {
   simVal<-data.frame(SampleUnits=rep(logdat$SampleUnits,nsim),
                      MeanVals=as.vector(simMean) * Effort,
                      phiVals=rep(phivals, each = nrow(logdat))) %>%
     rowwise() %>%
     mutate(Bycatch=getMeanNbinom(SampleUnits,MeanVals,phiVals))
+  }  else {
+    simVal<-data.frame(Bycatch=as.vector(simMean) * Effort)
+  }
   # simVal <- rnbinom(
   #   n = prod(dim(simMean)),
   #   mu = as.vector(simMean) * Effort,
