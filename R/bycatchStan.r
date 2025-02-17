@@ -684,6 +684,7 @@ bycatchStanSim <- function(setupObj,
       modeledEffort = modeledEffort,
       effortSD = effortSD,
       predictionInterval=predictionInterval,
+      
     )
     names(modelYearSum)[i] <- modelsToRun[i]
     if (modelsToRun[i] == "y~1")
@@ -727,12 +728,17 @@ getBycatchSim <- function(mod1,
                           modeledEffort = FALSE,
                           effortSD = NULL,
                           predictionInterval=predictionInterval,
-                          nsim = 1000) {
-  b0vals <- extract(mod1, pars = "b0")$b0
+                          nsim = 1000,
+                          usePrior=FALSE,
+                          returnDraws=FALSE) {
+  if(usePrior) b0vals<-rnorm(nsim,0,10) else
+   b0vals <- extract(mod1, pars = "b0")$b0
   subsetval <- sample(1:length(b0vals), nsim)
   if(ncol(matrixAll) > 1)
     bvals <- extract(mod1, pars = "b")$b else
       bvals <- NULL
+  if(!is.null(bvals) & usePrior)
+     bvals[,]<-rnorm(prod(dim(bvals)))
   b0vals <- b0vals[subsetval]
   bvals <- bvals[subsetval, ]
   bvals <- cbind(b0vals, bvals)
@@ -777,5 +783,33 @@ getBycatchSim <- function(mod1,
       upper = quantile(yearsum, 0.975),
       median = quantile(yearsum, 0.5)
     )
-  modelyrSum1
+  return<-modelyrSum1
+  if(returnDraws) return<-list(yearSum=modelyrSum1,
+                               gg1=gg1)
+}
+
+# prior simulation from default priors
+posteriorSimulation<-function(stanObj,coefs,nsim=1000) {
+  return<-data.frame(Iteration=1:nsim,
+                     Chain=1,
+                     Parameter=rep(coefs,each=nsim)) %>%
+    rowwise() %>%
+    mutate(value=case_when(Parameter=="b0"~rnorm(1,0,10),
+                           Parameter=="phi"~rexp(1,1),
+                           TRUE~rnorm(1,0,1)))
+  return
+}
+
+# plot prior and posterior
+plotPriorPosterior<-function(stanObj,priorvals=list(b0=10,b=1,phi=1)) {
+  posterior<-ggs(stanObj) %>%
+    filter(grepl("b",Parameter) | Parameter=="phi") 
+  coefs<-as.character(unique(posterior$Parameter))
+  prior<-posteriorSimulation(stanObj,coefs)
+  df<-bind_rows(list(prior=prior,posterior=posterior),.id="type")
+  ggplot(df,aes(x=value,color=type))+
+    geom_density()+
+    facet_wrap(~Parameter,scales="free")  +
+    scale_color_manual(values=c("blue","darkgrey"))+
+    labs(x="Parameter",y="Density",color="")
 }

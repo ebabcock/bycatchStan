@@ -13,6 +13,7 @@ library(lubridate)
 library(bayesplot)
 library(ggsci)
 library(flextable)
+theme_set(theme_bw())
 
 source("R/bycatchStan.r")
 
