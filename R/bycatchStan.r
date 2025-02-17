@@ -788,6 +788,7 @@ getBycatchSim <- function(mod1,
   return<-modelyrSum1
   if(returnDraws) return<-list(yearSum=modelyrSum1,
                                gg1=gg1)
+  return
 }
 
 # prior simulation from default priors
