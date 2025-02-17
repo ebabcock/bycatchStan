@@ -630,13 +630,15 @@ bycatchStanSim <- function(setupObj,
   logdat$Year1 <- logdat$Year
   if (length(numericalVars) > 0) {
     for (i in 1:length(numericalVars)) {
-      meanVals[i] <- mean(obsdat[[numericalVars[i]]], na.rm = TRUE)
-      sdVals[i] <- sd(obsdat[[numericalVars[i]]], na.rm = TRUE)
-      obsdat[numericalVars[[i]]] <- (obsdat[numericalVars[[i]]] - meanVals[i]) /
-        sdVals[i]
-      logdat[numericalVars[[i]]] <- (logdat[numericalVars[[i]]] - meanVals[i]) /
-        sdVals[i]
-    }
+      if(is.numeric(meanVals[i])) {
+       meanVals[i] <- mean(obsdat[[numericalVars[i]]], na.rm = TRUE)
+       sdVals[i] <- sd(obsdat[[numericalVars[i]]], na.rm = TRUE)
+       obsdat[numericalVars[[i]]] <- (obsdat[numericalVars[[i]]] - meanVals[i]) /
+         sdVals[i]
+       logdat[numericalVars[[i]]] <- (logdat[numericalVars[[i]]] - meanVals[i]) /
+         sdVals[i]
+      }
+     }
   }
   modelTables <- list()
   matrixAll <- list()
@@ -789,7 +791,7 @@ getBycatchSim <- function(mod1,
 }
 
 # prior simulation from default priors
-posteriorSimulation<-function(stanObj,coefs,nsim=1000) {
+priorSimulation<-function(stanObj,coefs,nsim=1000) {
   return<-data.frame(Iteration=1:nsim,
                      Chain=1,
                      Parameter=rep(coefs,each=nsim)) %>%
@@ -801,7 +803,7 @@ posteriorSimulation<-function(stanObj,coefs,nsim=1000) {
 }
 
 # plot prior and posterior
-plotPriorPosterior<-function(stanObj,priorvals=list(b0=10,b=1,phi=1)) {
+plotPriorPosterior<-function(stanObj) {
   posterior<-ggs(stanObj) %>%
     filter(grepl("b",Parameter) | Parameter=="phi") 
   coefs<-as.character(unique(posterior$Parameter))
