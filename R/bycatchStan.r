@@ -690,8 +690,7 @@ bycatchStanSim <- function(setupObj,
     )
     names(modelYearSum)[i] <- modelsToRun[i]
     if (modelsToRun[i] == "y~1")
-      pars <- c("b0", "phi")
-    else
+      pars <- c("b0", "phi") else
       pars <- c("b0", "b", "phi")
     diagList[[i]] <- data.frame(summary(stanRun, pars = pars)$summary) %>%
       rownames_to_column(var = "Parameter")
@@ -744,7 +743,8 @@ getBycatchSim <- function(mod1,
   b0vals <- b0vals[subsetval]
   bvals <- bvals[subsetval, ]
   bvals <- cbind(b0vals, bvals)
-  phivals <- extract(mod1, pars = "phi")$phi[subsetval]
+  if(usePrior) phivals<-rexp(nsim,1) else
+   phivals <- extract(mod1, pars = "phi")$phi[subsetval]
   simMean <- exp(matrixAll %*% t(bvals))
   EffortMean <- rep(logdat$Effort, nsim)
   EffortMean[EffortMean < 0.01] <- 0.01
@@ -816,3 +816,82 @@ plotPriorPosterior<-function(stanObj) {
     scale_color_manual(values=c("blue","darkgrey"))+
     labs(x="Parameter",y="Density",color="")
 }
+
+
+plotPriorPosteriorSims<-function(stanSum,
+                                 modelNum,
+                                 stanFit,
+                                 setupObj,
+                                 matrixAll,
+                                 modeledEffort = FALSE,
+                                 effortSD = NULL)  {
+  logdat<-setupObj$bycatchInput$logdat %>% 
+    mutate(y=1,
+           Year1=Year)
+  matrixAll<-model.matrix(formula(stanSum$waictab$Model[modelNum]),data=logdat)
+  
+  postvals<-getBycatchSim(stanFit,
+                          logdat,
+                          matrixAll,
+                          modeledEffort = modeledEffort,
+                          effortSD = effortSd,
+                          predictionInterval=TRUE,
+                          nsim = 30,
+                          usePrior=FALSE,
+                          returnDraws=TRUE) %>% 
+    group_by(Year, iterations) %>%
+    summarize(yearsum = sum(simVal)) 
+  
+  priorvals<-getBycatchSim(stanFit,
+                           logdat,
+                           matrixAll,
+                           modeledEffort = modeledEffort,
+                           effortSD = effortSd,
+                           predictionInterval=TRUE,
+                           nsim = 30,
+                           usePrior=TRUE,
+                           returnDraws=TRUE)[[2]] %>% 
+    group_by(Year, iterations) %>%
+    summarize(yearsum = sum(simVal)) 
+  ggplot(priorvals,aes(x=as.numeric(as.character(Year)),y=yearsum))+
+    geom_line(aes(group=iterations),alpha=0.9,color="lightblue")+
+    geom_line(data=filter(stanSum$yearSum,Model==stanSum$waictab$Model[modelNum]),
+              aes(x=as.numeric(as.character(Year)),y=mean),color="darkred")+
+    labs(x="Year",y="Byatch",color="")
+  ggplot(postvals,aes(x=as.numeric(as.character(Year)),y=yearsum))+
+    geom_line(aes(group=iterations),alpha=0.9,color="lightblue")+
+    geom_line(data=filter(stanSum$yearSum,Model==stanSum$waictab$Model[modelNum]),
+              aes(x=as.numeric(as.character(Year)),y=mean),color="darkred")+
+    labs(x="Year",y="Byatch",color="")
+}
+
+getResiduals<-function(stanSum,stanFit,modelNum,setupObj,nsim=1000,spNum=1) {
+  require(DHARMa)
+  obsdat<-setupObj$bycatchInputs$obsdat
+  obsdat$y<-obsdat[[setupObj$bycatchInputs$obsCatch[spNum]]]
+  b0vals <- extract(stanFit, pars = "b0")$b0
+  subsetval <- sample(1:length(b0vals), nsim)
+  if(ncol(matrixAll) > 1)
+    bvals <- extract(stanFit, pars = "b")$b else
+      bvals <- NULL
+  b0vals <- b0vals[subsetval]
+  bvals <- bvals[subsetval, ]
+  bvals <- cbind(b0vals, bvals)
+  phivals <- extract(stanFit, pars = "phi")$phi[subsetval]
+  matrix1<-model.matrix(formula(stanSum$waictab$Model[modelNum]),data=obsdat)
+  simMean <- exp(matrix1 %*% t(bvals))
+  EffortMean <- rep(obsdat$Effort, nsim)
+  EffortMean[EffortMean < 0.01] <- 0.01
+  simVal <- rnbinom(
+    n = prod(dim(simMean)),
+    mu = as.vector(simMean) * EffortMean,
+    size = rep(phivals, each = nrow(logdat))
+  )
+  simVal<-matrix(simVal,nrow(obsdat),nsim)
+  DHARMaRes <- createDHARMa(simulatedResponse =simVal , 
+                            observedResponse = obsdat$y, 
+                            fittedPredictedResponse = apply(simVal,1,mean),
+                            integerResponse = TRUE)
+  plot(DHARMaRes)
+}
+getResiduals(stanSum,stanFit,modelNum=2,setupObj) 
