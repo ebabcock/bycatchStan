@@ -45,15 +45,14 @@ setupObjBUM<-bycatchSetup(
 )
 
 dataCheck(setupObjBUM)
-modelsToRun<-c("y~Year+area","y~Year","y~1")
+modelsToRun<-c("y~Year","y~1")
 BUMRun<-bycatchStanSim(setupObjBUM,
                         modelsToRun=modelsToRun,
-                        spNum=1,  #which species to run in input is multispeces
+                        spNum=1,  #which species to run in input is multispecies
                         modeledEffort=FALSE,
                         outDir=getwd())
 Sys.time()
 #Function prints to an rds file. You can read it in here.
-#BUMRUn<-readRDS("Output LLSIMBUMtripExample/Blue Marlin Catch/2025-01-06StanOutputs.rds")
 
 #Plot bycatch estimates
 plotStan(BUMRun$yearSum)
@@ -61,8 +60,44 @@ plotStan(BUMRun$yearSum)
 #Look at model selection table
 BUMRun$waictab
 
-# Read in stan run for best model and look at diagnostics
-bestMod<-readRDS("Output LLSIMBUMtripExample/Blue Marlin Catch/Makaira nigricans1run1-2025-01-06.rds")
-stan_dens(bestMod,par="b")
-stan_diag(bestMod)
+# Code to reload runs to look at diagnostics
+#Specify directory with bycatch Estimator results
+outDir<-paste0(getwd(),"/Output LLSIMBUMtripExample/")
+# Date of bycatch estimator run
+estimatorDate<-"2025-02-19"
+# Date of stan run
+stanDate<-"2025-02-19"
+# Read in bycatchEstimator setup
+setupObj<-readRDS(c(paste0(outDir,estimatorDate,"_BycatchModelSpecification.rds")))
+spNum<-1
+# Read in stan run summary files
+stanSum<-readRDS(paste0(outDir,setupObj$bycatchInputs$common[spNum]," ",setupObj$bycatchInputs$catchType,
+                        "/",stanDate,"StanOutputs.rds"))
+stanSum$waictab
+modelNum<-which(stanSum$waictab$waic==0) #To get WAIC best
+# Load the selected model
+stanObj<-readRDS(paste0(outDir,setupObj$bycatchInputs$common[spNum]," ",setupObj$bycatchInputs$catchType,
+                        "/",setupObj$bycatchInputs$sp[spNum],spNum,"run",modelNum,"-",
+                        stanDate,".rds"))
+
+# Plot residuals
+getResiduals(stanSum, 
+             stanObj,
+             modelNum,
+             setupObj)
+
+# plot prior and posterior densities of parameters
+plotPriorPosterior(stanObj) 
+
+# Plot prior and posterior draws of bycatch 
+plotPriorPosteriorSims(stanSum,
+                       modelNum,
+                       stanObj,
+                       setupObj,
+                       modeledEffort = TRUE,
+                       effortSD = "hoursSD")  
+
+#Convergence diagnostics
+stan_diag(stanObj)
+getSummary(stanSum,stanFit,modelNum,setupObj,spNum=1) 
 

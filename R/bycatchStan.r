@@ -1,3 +1,18 @@
+library(tidyverse)
+library(BycatchEstimator)
+library(MuMIn)
+library(gridExtra)
+library(rstan)
+library(loo)
+library(shinystan)
+library(ggmcmc)
+library(readxl)
+library(lubridate)
+library(bayesplot)
+library(ggsci)
+library(flextable)
+theme_set(theme_bw())
+
 #Function to get WAIC and LOOIC from one stan model object
 getIC <- function(mod1) {
   LL1 <- extract_log_lik(mod1, "LL")
@@ -707,7 +722,12 @@ bycatchStanSim <- function(setupObj,
     waictab = waictab,
     yearSum = yearSum,
     diagTable = diagTable,
-    stanRunFiles = stanRunFiles
+    stanRunFiles = stanRunFiles,
+    stanInputs = list(modelsToRun=modelsToRun,
+                      spNum=spNum,
+                      modeledEffort=modeledEffort,
+                      effortSD=effortSD,
+                      predictionInterval=predictionInterval)
   )
   saveRDS(returnVal, file = paste0(dirVal, Sys.Date(), "StanOutputs.rds"))
   return(returnVal)
@@ -732,19 +752,23 @@ getBycatchSim <- function(mod1,
                           nsim = 1000,
                           usePrior=FALSE,
                           returnDraws=FALSE) {
-  if(usePrior) b0vals<-rnorm(nsim,0,10) else
-   b0vals <- extract(mod1, pars = "b0")$b0
-  subsetval <- sample(1:length(b0vals), nsim)
-  if(ncol(matrixAll) > 1)
-    bvals <- extract(mod1, pars = "b")$b else
-      bvals <- NULL
-  if(!is.null(bvals) & usePrior)
-     bvals[,]<-rnorm(prod(dim(bvals)))
-  b0vals <- b0vals[subsetval]
-  bvals <- bvals[subsetval, ]
+  if(usePrior) {
+    b0vals<-rnorm(nsim,0,10) 
+    if(ncol(matrixAll)>1)
+      bvals<-matrix(rnorm(prod(nsim,(ncol(matrixAll)-1)),0,1),nsim,(ncol(matrixAll)-1))
+    phivals<-rexp(nsim,1)
+  }
+  else {
+    b0vals <- extract(mod1, pars = "b0")$b0
+    subsetval <- sample(1:length(b0vals), nsim)
+    if(ncol(matrixAll) > 1)
+      bvals <- extract(mod1, pars = "b")$b else
+        bvals <- NULL
+    b0vals <- b0vals[subsetval]
+    bvals <- bvals[subsetval, ]
+    phivals <- extract(mod1, pars = "phi")$phi[subsetval]
+  }
   bvals <- cbind(b0vals, bvals)
-  if(usePrior) phivals<-rexp(nsim,1) else
-   phivals <- extract(mod1, pars = "phi")$phi[subsetval]
   simMean <- exp(matrixAll %*% t(bvals))
   EffortMean <- rep(logdat$Effort, nsim)
   EffortMean[EffortMean < 0.01] <- 0.01
@@ -764,11 +788,6 @@ getBycatchSim <- function(mod1,
   }  else {
     simVal<-data.frame(Bycatch=as.vector(simMean) * Effort)
   }
-  # simVal <- rnbinom(
-  #   n = prod(dim(simMean)),
-  #   mu = as.vector(simMean) * Effort,
-  #   size = rep(phivals, each = nrow(logdat))
-  # )
   gg1 <- data.frame(
     simVal = simVal$Bycatch,
     row = rep(1:nrow(logdat),nsim),
@@ -808,7 +827,7 @@ plotPriorPosterior<-function(stanObj) {
   posterior<-ggs(stanObj) %>%
     filter(grepl("b",Parameter) | Parameter=="phi") 
   coefs<-as.character(unique(posterior$Parameter))
-  prior<-posteriorSimulation(stanObj,coefs)
+  prior<-priorSimulation(stanObj,coefs)
   df<-bind_rows(list(prior=prior,posterior=posterior),.id="type")
   ggplot(df,aes(x=value,color=type))+
     geom_density()+
@@ -820,25 +839,23 @@ plotPriorPosterior<-function(stanObj) {
 
 plotPriorPosteriorSims<-function(stanSum,
                                  modelNum,
-                                 stanFit,
+                                 stanObj,
                                  setupObj,
-                                 matrixAll,
                                  modeledEffort = FALSE,
                                  effortSD = NULL)  {
   logdat<-setupObj$bycatchInput$logdat %>% 
     mutate(y=1,
            Year1=Year)
   matrixAll<-model.matrix(formula(stanSum$waictab$Model[modelNum]),data=logdat)
-  
-  postvals<-getBycatchSim(stanFit,
+  postvals<-getBycatchSim(stanObj,
                           logdat,
                           matrixAll,
                           modeledEffort = modeledEffort,
-                          effortSD = effortSd,
+                          effortSD = effortSD,
                           predictionInterval=TRUE,
                           nsim = 30,
                           usePrior=FALSE,
-                          returnDraws=TRUE) %>% 
+                          returnDraws=TRUE)[[2]] %>% 
     group_by(Year, iterations) %>%
     summarize(yearsum = sum(simVal)) 
   
@@ -846,31 +863,35 @@ plotPriorPosteriorSims<-function(stanSum,
                            logdat,
                            matrixAll,
                            modeledEffort = modeledEffort,
-                           effortSD = effortSd,
+                           effortSD = effortSD,
                            predictionInterval=TRUE,
                            nsim = 30,
                            usePrior=TRUE,
                            returnDraws=TRUE)[[2]] %>% 
     group_by(Year, iterations) %>%
     summarize(yearsum = sum(simVal)) 
-  ggplot(priorvals,aes(x=as.numeric(as.character(Year)),y=yearsum))+
+  g1<-ggplot(priorvals,aes(x=as.numeric(as.character(Year)),y=yearsum))+
     geom_line(aes(group=iterations),alpha=0.9,color="lightblue")+
     geom_line(data=filter(stanSum$yearSum,Model==stanSum$waictab$Model[modelNum]),
               aes(x=as.numeric(as.character(Year)),y=mean),color="darkred")+
-    labs(x="Year",y="Byatch",color="")
-  ggplot(postvals,aes(x=as.numeric(as.character(Year)),y=yearsum))+
+    labs(x="Year",y="Byatch",color="",title="Annual bycatch prior draws")
+  g2<-ggplot(postvals,aes(x=as.numeric(as.character(Year)),y=yearsum))+
     geom_line(aes(group=iterations),alpha=0.9,color="lightblue")+
     geom_line(data=filter(stanSum$yearSum,Model==stanSum$waictab$Model[modelNum]),
               aes(x=as.numeric(as.character(Year)),y=mean),color="darkred")+
-    labs(x="Year",y="Byatch",color="")
+    labs(x="Year",y="Byatch",color="",title="Annual bycatch posterior draws")
+  gridExtra::grid.arrange(g1,g2)
 }
 
 getResiduals<-function(stanSum,stanFit,modelNum,setupObj,nsim=1000,spNum=1) {
+  require(rstan)
   require(DHARMa)
   obsdat<-setupObj$bycatchInputs$obsdat
+  obsdat$y<-1
   obsdat$y<-obsdat[[setupObj$bycatchInputs$obsCatch[spNum]]]
   b0vals <- extract(stanFit, pars = "b0")$b0
   subsetval <- sample(1:length(b0vals), nsim)
+  matrixAll<-model.matrix(formula(stanSum$waictab$Model[modelNum]),data=obsdat)
   if(ncol(matrixAll) > 1)
     bvals <- extract(stanFit, pars = "b")$b else
       bvals <- NULL
@@ -894,4 +915,16 @@ getResiduals<-function(stanSum,stanFit,modelNum,setupObj,nsim=1000,spNum=1) {
                             integerResponse = TRUE)
   plot(DHARMaRes)
 }
-getResiduals(stanSum,stanFit,modelNum=2,setupObj) 
+
+#Get summary
+getSummary<-function(stanSum,stanFit,modelNum,setupObj,spNum=1) {
+  obsdat<-setupObj$bycatchInputs$obsdat
+  obsdat$y<-1
+  obsdat$y<-obsdat[[setupObj$bycatchInputs$obsCatch[spNum]]]
+  matrixAll<-model.matrix(formula(stanSum$waictab$Model[modelNum]),data=obsdat)
+  parVals<-c("phi","b0")
+  if(ncol(matrixAll)>1)
+    parVals<-c(parVals,paste0("b[",1:(ncol(matrixAll)-1),"]"))
+  temp<-summary(stanObj,pars=parVals)
+  round(temp$summary,4)
+}
