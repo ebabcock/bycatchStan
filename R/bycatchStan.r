@@ -906,7 +906,7 @@ getResiduals<-function(stanSum,stanFit,modelNum,setupObj,nsim=1000,spNum=1) {
   simVal <- rnbinom(
     n = prod(dim(simMean)),
     mu = as.vector(simMean) * EffortMean,
-    size = rep(phivals, each = nrow(logdat))
+    size = rep(phivals, each = nrow(obsdat))
   )
   simVal<-matrix(simVal,nrow(obsdat),nsim)
   DHARMaRes <- createDHARMa(simulatedResponse =simVal , 
