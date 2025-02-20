@@ -874,12 +874,12 @@ plotPriorPosteriorSims<-function(stanSum,
     geom_line(aes(group=iterations),alpha=0.9,color="lightblue")+
     geom_line(data=filter(stanSum$yearSum,Model==stanSum$waictab$Model[modelNum]),
               aes(x=as.numeric(as.character(Year)),y=mean),color="darkred")+
-    labs(x="Year",y="Byatch",color="",title="Annual bycatch prior draws")
+    labs(x="Year",y="Bycatch",color="",title="Annual bycatch prior draws")
   g2<-ggplot(postvals,aes(x=as.numeric(as.character(Year)),y=yearsum))+
     geom_line(aes(group=iterations),alpha=0.9,color="lightblue")+
     geom_line(data=filter(stanSum$yearSum,Model==stanSum$waictab$Model[modelNum]),
               aes(x=as.numeric(as.character(Year)),y=mean),color="darkred")+
-    labs(x="Year",y="Byatch",color="",title="Annual bycatch posterior draws")
+    labs(x="Year",y="Bycatch",color="",title="Annual bycatch posterior draws")
   gridExtra::grid.arrange(g1,g2)
 }
 
