@@ -50,6 +50,10 @@ BUMRun<-bycatchStanSim(setupObjBUM,
                         modelsToRun=modelsToRun,
                         spNum=1,  #which species to run in input is multispecies
                         modeledEffort=FALSE,
+                        priors =  list(interceptSD=10,
+                                      coefficientSD=1,
+                                      phiType=c("exponential","normal")[1],
+                                      phiPar=1),
                         outDir=getwd())
 Sys.time()
 #Function prints to an rds file. You can read it in here.

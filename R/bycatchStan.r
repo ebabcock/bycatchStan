@@ -518,12 +518,16 @@ plotMortalityFunc <- function(modelyrSum1, Species) {
 
 
 #Write out the stan file for negative binomial with
-#no simulation of effort
+#no simulation of effort, includes priors
 write(
   "data{
  int N;
  int Ncoef;
  int Y[N];
+ real interceptSD;
+ real coefficientSD;
+ int phiType;
+ real phiPar;
  vector[N] offset;
  matrix[N,Ncoef] xMatrix;
 }
@@ -541,9 +545,13 @@ transformed parameters{
   }
 }
 model{
-  b0~normal(0,10);
-  b~normal(0,1);
-  phi~normal(0,1);
+  b0~normal(0,interceptSD);
+  b~normal(0,coefficientSD);
+  if(phiType==1) {
+    phi~exponential(phiPar);
+  }  else  {
+    phi~normal(0,phiPar);
+  }
   Y~neg_binomial_2(mu,phi);
 }
 generated quantities {
@@ -562,6 +570,9 @@ write(
   "data{
  int N;
  int Ncoef;
+ real interceptSD;
+ int phiType;
+ real phiPar;
  int Y[N];
  vector[N] offset;
 }
@@ -578,8 +589,12 @@ transformed parameters{
   }
 }
 model{
-  b0~normal(0,10);
-  phi~normal(0,1);
+  b0~normal(0,interceptSD);
+  if(phiType==1) {
+    phi~exponential(phiPar);
+  }  else  {
+    phi~normal(0,phiPar);
+  }
   Y~neg_binomial_2(mu,phi);
 }
 generated quantities {
@@ -601,6 +616,10 @@ bycatchStanSim <- function(setupObj,
                            spNum = 1,
                            #which of the species to run from multispecies setuObj
                            stanModel = "nbinom2",
+                           priors =  list(interceptSD=10,
+                                          coefficientSD=1,
+                                          phiType=c("exponential","normal")[1],
+                                          phiPar=1),
                            modeledEffort = FALSE,
                            effortSD = NULL,
                            predictionInterval=TRUE,
@@ -676,6 +695,9 @@ bycatchStanSim <- function(setupObj,
       dataList <- list(
         Y = obsdat[[obsCatch[spNum]]],
         N = nrow(modelTables[[i]]),
+        interceptSD=priors$interceptSD,
+        phiType=ifelse(priors$phiType=="normal",2,1),
+        phiPar=priors$phiPar,
         Ncoef = ncol(modelTables[[i]]) - 1,
         offset = obsdat$Effort
       )
@@ -687,7 +709,11 @@ bycatchStanSim <- function(setupObj,
         N = nrow(modelTables[[i]]),
         Ncoef = ncol(modelTables[[i]]) - 1,
         offset = obsdat$Effort,
-        xMatrix = as.matrix(modelTables[[i]][, -1])
+        xMatrix = as.matrix(modelTables[[i]][, -1]),
+        interceptSD = priors$interceptSD,
+        coefficientSD = priors$coefficientSD,
+        phiType=ifelse(priors$phiType=="normal",2,1),
+        phiPar=priors$phiPar
       )
       stanRun <- stan(file = "NB2matrixNoEffort.stan", data = dataList,
                       pars=c("b0","b","phi","LL"))
@@ -700,6 +726,7 @@ bycatchStanSim <- function(setupObj,
       matrixAll = matrixAll[[i]],
       modeledEffort = modeledEffort,
       effortSD = effortSD,
+      priors =  priors,
       predictionInterval=predictionInterval,
       
     )
@@ -727,7 +754,8 @@ bycatchStanSim <- function(setupObj,
                       spNum=spNum,
                       modeledEffort=modeledEffort,
                       effortSD=effortSD,
-                      predictionInterval=predictionInterval)
+                      predictionInterval=predictionInterval,
+                      priors=priors)
   )
   saveRDS(returnVal, file = paste0(dirVal, Sys.Date(), "StanOutputs.rds"))
   return(returnVal)
@@ -751,12 +779,18 @@ getBycatchSim <- function(mod1,
                           predictionInterval=predictionInterval,
                           nsim = 1000,
                           usePrior=FALSE,
+                          priors = list(interceptSD=10,
+                                        coefficientSD=1,
+                                        phiType=c("exponential","normal")[1],
+                                        phiPar=1),
                           returnDraws=FALSE) {
   if(usePrior) {
-    b0vals<-rnorm(nsim,0,10) 
+    b0vals<-rnorm(nsim,0,priors$interceptSD) 
     if(ncol(matrixAll)>1)
-      bvals<-matrix(rnorm(prod(nsim,(ncol(matrixAll)-1)),0,1),nsim,(ncol(matrixAll)-1))
-    phivals<-rexp(nsim,1)
+      bvals<-matrix(rnorm(prod(nsim,(ncol(matrixAll)-1)),0,priors$coefficientSD),nsim,(ncol(matrixAll)-1))
+    if(priors$phiType=="normal") 
+      phivals=truncnorm::rtruncnorm(nsim, a=0, b=Inf, mean = 0, sd = priors$phiPar) else
+    phivals<-rexp(nsim,priors$phiPar)
   }
   else {
     b0vals <- extract(mod1, pars = "b0")$b0
@@ -811,12 +845,19 @@ getBycatchSim <- function(mod1,
 }
 
 # prior simulation from default priors
-priorSimulation<-function(stanObj,coefs,nsim=1000) {
+priorSimulation<-function(stanObj,
+                          coefs,
+                          nsim=1000,
+                          priors =  list(interceptSD=10,
+                                         coefficientSD=1,
+                                         phiType=c("exponential","normal")[1],
+                                         phiPar=1)
+) {
   return<-data.frame(Iteration=1:nsim,
                      Chain=1,
                      Parameter=rep(coefs,each=nsim)) %>%
     rowwise() %>%
-    mutate(value=case_when(Parameter=="b0"~rnorm(1,0,10),
+    mutate(value=case_when(Parameter=="b0"~rnorm(1,0,priors),
                            Parameter=="phi"~rexp(1,1),
                            TRUE~rnorm(1,0,1)))
   return
