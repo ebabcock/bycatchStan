@@ -1,15 +1,15 @@
 # install.packages("devtools")
-# devtools::install_github("ebabcock/BycatchEstimator")
+# devtools::install_github("ebabcock/BycatchEstimator", force=TRUE)
 library(tidyverse)
 library(BycatchEstimator)
 library(MuMIn)
 library(gridExtra)
 library(rstan)
+library(cmdstanr)
 library(loo)
 library(shinystan)
 library(ggmcmc)
 library(readxl)
-library(lubridate)
 library(bayesplot)
 library(ggsci)
 library(flextable)
@@ -20,20 +20,16 @@ source("R/bycatchStan.r")
 ## Run example code from bycatchEstimator
 
 setupObjBUM<-bycatchSetup(
-  modelTry = c("TMBnbinom1"),
   obsdat = droplevels(LLSIM_BUM_Example_observer[LLSIM_BUM_Example_observer$Year>2010 &LLSIM_BUM_Example_observer$fleet==2,]),
   logdat = droplevels(LLSIM_BUM_Example_logbook[LLSIM_BUM_Example_logbook$Year>2010 & LLSIM_BUM_Example_logbook$fleet==2,]),
   yearVar = "Year",
   obsEffort = "hooks",
   logEffort = "hooks",
-  logUnsampledEffort = "unsampledEffort",
-  factorNames = c("Year","area"),
+  factorVariables = c("Year","area"),  
+  numericVariables = NA, 
   EstimateBycatch = TRUE,
   logNum = NA,
   sampleUnit = "trips",
-  complexModel = formula(y~Year+area),
-  simpleModel = formula(y~Year),
-  indexModel = formula(y~Year),
   baseDir = getwd(),
   runName = "LLSIMBUMtripExample",
   runDescription = "LLSIm BUM by trip, with 5% observer coverage",
@@ -41,10 +37,9 @@ setupObjBUM<-bycatchSetup(
   sp = "Makaira nigricans",
   obsCatch ="BUM",
   catchUnit = "number",
-  catchType = "catch"
+  catchType = "catch",
+  reportType = "html"  
 )
-
-dataCheck(setupObjBUM)
 modelsToRun<-c("y~Year","y~1")
 BUMRun<-bycatchStanSim(setupObjBUM,
                         modelsToRun=modelsToRun,
@@ -68,11 +63,11 @@ BUMRun$waictab
 #Specify directory with bycatch Estimator results
 outDir<-paste0(getwd(),"/Output LLSIMBUMtripExample/")
 # Date of bycatch estimator run
-estimatorDate<-"2025-02-19"
+estimatorDate<-"2025-07-02"
 # Date of stan run
-stanDate<-"2025-02-19"
+stanDate<-"2025-07-02"
 # Read in bycatchEstimator setup
-setupObj<-readRDS(c(paste0(outDir,estimatorDate,"_BycatchModelSpecification.rds")))
+setupObj<-readRDS(c(paste0(outDir,estimatorDate,"_BycatchSetupSpecification.rds")))
 spNum<-1
 # Read in stan run summary files
 stanSum<-readRDS(paste0(outDir,setupObj$bycatchInputs$common[spNum]," ",setupObj$bycatchInputs$catchType,
@@ -98,8 +93,8 @@ plotPriorPosteriorSims(stanSum,
                        modelNum,
                        stanObj,
                        setupObj,
-                       modeledEffort = TRUE,
-                       effortSD = "hoursSD")  
+                       modeledEffort = FALSE,
+                       effortSD = NULL)  
 
 #Convergence diagnostics
 stan_diag(stanObj)

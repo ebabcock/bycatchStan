@@ -13,14 +13,14 @@ library(flextable)
 theme_set(theme_bw())
 
 #Function to get WAIC and LOOIC from one stan model object
-getIC <- function(mod1,useCode) {
+getIC <- function(mod1) {
   LL1 <- extract_log_lik(mod1, "LL")
   waicval <- waic(LL1)$estimates
   looval <- loo(LL1)$estimates
   c(waic = waicval[3, 1], looic = looval[3, 1])
 }
 #Function to calculate total bycatch from one stan model object
-getBycatch <- function(mod1, logdat,useCode) {
+getBycatch <- function(mod1, logdat) {
   gg1 <- extract(mod1, pars = "StrataBycatch")$StrataBycatch
   gg1 <- reshape2::melt(gg1)
   gg1 <- as.data.frame(gg1) %>%
@@ -38,7 +38,225 @@ getBycatch <- function(mod1, logdat,useCode) {
     )
   modelyrSum1
 }
+#Write out the stan file for negative binomial with estimated effort
+write(
+  "data{
+ int N;
+ int Nall;
+ int Ncoef;
+ int Y[N];
+ vector[N] offset;
+ matrix[N,Ncoef] xMatrix;
+ matrix[Nall,Ncoef] xMatrixAll;
+ vector[Nall] EffortMean;
+ vector[Nall] EffortSd;
+}
+parameters{
+ vector[Ncoef] b;
+ real<lower=0.00001> phi;
+}
+transformed parameters{
+  vector[N] logmu;
+  vector[N] mu;
+  logmu = xMatrix*b;
+  for(i in 1:N) {
+   mu[i] = exp(logmu[i])*offset[i];
+  }
+}
+model{
+  b~normal(0,10);
+  phi~normal(0,1);
+  Y~neg_binomial_2(mu,phi);
+}
+generated quantities {
+  real LL[N];
+  real Yrep[N];
+  real muAll[Nall];
+  real EffortEst[Nall];
+  real StrataBycatch[Nall];
+  for(i in 1:N) {
+   Yrep[i] = neg_binomial_2_rng(mu[i],phi);
+   LL[i] = neg_binomial_2_lpmf(Y[i]|mu[i],phi);
+  }
+  for(i in 1:Nall) {
+    muAll[i] = exp(xMatrixAll[i,]*b);
+    EffortEst[i] =  normal_rng(EffortMean[i],EffortSd[i]);
+    StrataBycatch[i] = muAll[i]*EffortEst[i];
+  }
+}
 
+",
+file="NB2matrix.stan")
+
+#Write out the stan file for negative binomial with ordinary logbook effort
+write(
+  "data{
+ int N;
+ int Nall;
+ int Ncoef;
+ int Y[N];
+ vector[N] offset;
+ matrix[N,Ncoef] xMatrix;
+ matrix[Nall,Ncoef] xMatrixAll;
+ vector[Nall] EffortAll;
+}
+parameters{
+ vector[Ncoef] b;
+ real<lower=0.00001,upper=100> phi;
+}
+transformed parameters{
+  vector[N] logmu;
+  vector[N] mu;
+  logmu = xMatrix*b;
+  for(i in 1:N) {
+   mu[i] = exp(logmu[i])*offset[i];
+  }
+}
+model{
+  b~normal(0,10);
+  phi~normal(0,1);
+  Y~neg_binomial_2(mu,phi);
+}
+generated quantities {
+  real LL[N];
+  real Yrep[N];
+  real muAll[Nall];
+  real StrataBycatch[Nall];
+  for(i in 1:N) {
+   Yrep[i] = neg_binomial_2_rng(mu[i],phi);
+   LL[i] = neg_binomial_2_lpmf(Y[i]|mu[i],phi);
+  }
+  for(i in 1:Nall) {
+    muAll[i] = exp(xMatrixAll[i,]*b)*EffortAll[i];
+    StrataBycatch[i] = neg_binomial_2_rng(muAll[i],phi);
+  }
+}
+
+
+",file="NB2matrixCompleteEffort.stan")
+
+#Function to run a set of negative binomial stan models to estimate bycatch
+#taking a bycatchEstimator setup object as an input.
+bycatchStan <- function(setupObj,
+                        modelsToRun = NULL,
+                        spNum = 1,
+                        #which of the species to run from multispecies setuObj
+                        stanModel = "nbinom2",
+                        modeledEffort = FALSE,
+                        outDir = NULL) {
+  require(rstan)
+  require(loo)
+  options(mc.cores = parallel::detectCores())
+  # To keep a compiled version of the code so you don't have to recompile
+  rstan_options(auto_write = TRUE)
+  #Unpack setupObj
+  modelTry <- obsdat <- logdat <- yearVar <- obsEffort <- logEffort <- logUnsampledEffort <-
+    includeObsCatch <- matchColumn <- factorNames <- randomEffects <- randomEffects2 <-
+    EstimateIndex <- EstimateBycatch <- logNum <- sampleUnit <- complexModel <-
+    simpleModel <- indexModel <-
+    designMethods <- designVars <- designPooling <- poolTypes <- pooledVar <-
+    adjacentNum <-
+    minStrataUnit <-
+    baseDir <- runName <- runDescription <-
+    common <- sp <- obsCatch <- catchUnit <- catchType <- NULL
+  
+  numSp <- modelTable <- modelSelectTable <- modFits <- modPredVals <- modIndexVals <-
+    residualTab <- bestmod <- predbestmod <- indexbestmod <- allmods <- allindex <-
+    modelFail <- rmsetab <- metab <- dat <- yearSum <- requiredVarNames <-
+    allVarNames <- indexDat <- strataSum <- NumCores <- NULL
+  
+  for (r in 1:NROW(setupObj$bycatchInputs))
+    assign(names(setupObj$bycatchInputs)[r], setupObj$bycatchInputs[[r]])
+  for (r in 1:NROW(setupObj$bycatchOutputs))
+    assign(names(setupObj$bycatchOutputs)[r], setupObj$bycatchOutputs[[r]])
+  
+  if (is.null(outDir))
+    outDir <- baseDir
+  if (!dir.exists(outDir))
+    stop("Directory not found")
+  numMod <- length(modelsToRun)
+  #standardize numeric variables
+  meanVals <- NULL
+  sdVals <- NULL
+  if (length(numericVariables) > 0) {
+    for (i in 1:length(numericVariables)) {
+      meanVals[i] <- mean(obsdat[[numericVariables[i]]], na.rm = TRUE)
+      sdVals[i] <- sd(obsdat[[numericVariables[i]]], na.rm = TRUE)
+      obsdat[numericVariables[[i]]] <- (obsdat[numericVariables[[i]]] - meanVals[i]) /
+        sdVals[i]
+      logdat[numericVariables[[i]]] <- (logdat[numericVariables[[i]]] - meanVals[i]) /
+        sdVals[i]
+    }
+  }
+  modelTables <- list()
+  matrixAll <- list()
+  obsdat <- mutate(obsdat, y = 1)
+  logdat <- mutate(logdat, y = 1)
+  for (i in 1:numMod) {
+    mod1 <- lm(formula = formula(modelsToRun[i]), data = obsdat)
+    modelTables[[i]] <- model.matrix(mod1)
+    matrixAll[[i]] <- model.matrix(formula(mod1), data = logdat)
+  }
+  stanRunFiles <- NULL
+  waicList <- list()
+  modelYearSum <- list()
+  diagList <- list()
+  dirVal <- paste0(outDir, "/Output ", runName, "/", common[spNum], " ", catchType[spNum], "/")
+  if (!dir.exists(dirVal))
+    dir.create(paste0(dirVal), recursive = TRUE)
+  for (i in 1:numMod) {
+    if (modeledEffort) {
+      dataList <- list(
+        Y = obsdat[[obsCatch[spNum]]],
+        N = nrow(modelTables[[i]]),
+        Ncoef = ncol(modelTables[[i]]),
+        offset = obsdat$Effort,
+        xMatrix = modelTables[[i]],
+        xMatrixAll = matrixAll[[i]],
+        EffortMean = logdat$Effort,
+        EffortSd = ifelse(logdat$hoursSD > 0, logdat$hoursSD, 0.01 *
+                            logdat$Effort),
+        Nall = nrow(matrixAll[[i]])
+      )
+      stanRun <- stan(file = "NB2matrix.stan", data = dataList)
+    }  else {
+      #If effort is not a model output
+      dataList <- list(
+        Y = obsdat[[obsCatch[spNum]]],
+        N = nrow(modelTables[[i]]),
+        Ncoef = ncol(modelTables[[i]]),
+        offset = obsdat$Effort,
+        xMatrix = modelTables[[i]],
+        xMatrixAll = matrixAll[[i]],
+        EffortAll = logdat$Effort,
+        Nall = nrow(matrixAll[[i]])
+      )
+      stanRun <- stan(file = "NB2matrixCompleteEffort.stan", data = dataList)
+    }
+    waicList[[i]] <- getIC(stanRun)
+    names(waicList)[i] <- modelsToRun[i]
+    modelYearSum[[i]] <- getBycatch(stanRun, logdat = logdat)
+    names(modelYearSum)[i] <- modelsToRun[i]
+    diagList[[i]] <- data.frame(summary(stanRun, pars = c("b", "phi"))$summary) %>%
+      rownames_to_column(var = "Parameter")
+    names(diagList)[i] <- modelsToRun[i]
+    stanRunFiles[i] <- paste0(dirVal, sp, spNum, "run", i, "-", Sys.Date(), ".rds")
+    saveRDS(stanRun, file = stanRunFiles[i])
+    rm("stanRun")
+  }
+  waictab <- bind_rows(waicList, .id = "Model") %>%
+    mutate(waic = waic - min(waic), looic = looic - min(looic))
+  yearSum <- bind_rows(modelYearSum, .id = "Model")
+  diagTable <- bind_rows(diagList, .id = "Model")
+  returnVal <- list(
+    waictab = waictab,
+    yearSum = yearSum,
+    diagTable = diagTable,
+    stanRunFiles = stanRunFiles
+  )
+  saveRDS(returnVal, file = paste0(dirVal, Sys.Date(), "StanOutputs.rds"))
+  return(returnVal)
+}
 
 #Function to plot annual total bycatch from the annual summary table
 plotStan <- function(yearSum) {
@@ -143,6 +361,7 @@ mortalityStan <- function(mortData,
                           #run name
                           predictP) {
   #TRUE/FALSE, do we want to predict to new data?
+  
   require(rstan)
   require(loo)
   if (!dir.exists(outDir))
@@ -210,7 +429,11 @@ mortalityStan <- function(mortData,
   return(returnVal)
 }
 
-# function to standardize numeric variables to means and variances from obsdat
+#Function to combine total bycatch with mortality to get total mortality
+
+###
+
+# standardize numeric variables to means and variances from obsdat
 # Apply this to logdat so that predictions will be correct if using numerical variables
 standardizeToObsdat <- function(obsdat, newdat, numericVariables = NULL) {
   meanVals <- NULL
@@ -227,7 +450,6 @@ standardizeToObsdat <- function(obsdat, newdat, numericVariables = NULL) {
   newdat
 }
 
-#Function to get mortality predictions 
 getMortPred <- function(logdat,
                         mortPredDat,
                         sp,
@@ -401,7 +623,6 @@ bycatchStanSim <- function(setupObj,
                            predictionInterval=TRUE,
                            outDir = NULL) {
   if (is.null(effortSD) & modeledEffort)      stop("Must supply the name of the effortSD column if using estimated effort")
-  if(all(is.na(numericVariables))) numericVariables<-NULL
   require(rstan)
   require(loo)
   options(mc.cores = parallel::detectCores())
@@ -427,17 +648,17 @@ bycatchStanSim <- function(setupObj,
   sdVals <- NULL
   obsdat$Year1 <- obsdat$Year
   logdat$Year1 <- logdat$Year
-  if(length(numericVariables) > 0) {
+  if (length(numericVariables) > 0) {
     for (i in 1:length(numericVariables)) {
-      if(is.numeric(obsdat[,meanVals[i]])) {
-       meanVals[i] <- mean(obsdat[[numericVariables[i]]], na.rm = TRUE)
-       sdVals[i] <- sd(obsdat[[numericVariables[i]]], na.rm = TRUE)
-       obsdat[numericVariables[[i]]] <- (obsdat[numericVariables[[i]]] - meanVals[i]) /
-         sdVals[i]
-       logdat[numericVariables[[i]]] <- (logdat[numericVariables[[i]]] - meanVals[i]) /
-         sdVals[i]
+      if(is.numeric(meanVals[i])) {
+        meanVals[i] <- mean(obsdat[[numericVariables[i]]], na.rm = TRUE)
+        sdVals[i] <- sd(obsdat[[numericVariables[i]]], na.rm = TRUE)
+        obsdat[numericVariables[[i]]] <- (obsdat[numericVariables[[i]]] - meanVals[i]) /
+          sdVals[i]
+        logdat[numericVariables[[i]]] <- (logdat[numericVariables[[i]]] - meanVals[i]) /
+          sdVals[i]
       }
-     }
+    }
   }
   modelTables <- list()
   matrixAll <- list()
@@ -453,10 +674,10 @@ bycatchStanSim <- function(setupObj,
   modelYearSum <- list()
   diagList <- list()
   dirVal <- paste0(outDir, "/Output ", runName, "/", common[spNum], " ", catchType[spNum], "/")
-  if(!dir.exists(dirVal))
+  if (!dir.exists(dirVal))
     dir.create(paste0(dirVal), recursive = TRUE)
   for (i in 1:numMod) {
-    if(modelsToRun[i] == "y~1") {
+    if (modelsToRun[i] == "y~1") {
       dataList <- list(
         Y = obsdat[[obsCatch[spNum]]],
         N = nrow(modelTables[[i]]),
@@ -498,7 +719,7 @@ bycatchStanSim <- function(setupObj,
     names(modelYearSum)[i] <- modelsToRun[i]
     if (modelsToRun[i] == "y~1")
       pars <- c("b0", "phi") else
-      pars <- c("b0", "b", "phi")
+        pars <- c("b0", "b", "phi")
     diagList[[i]] <- data.frame(summary(stanRun, pars = pars)$summary) %>%
       rownames_to_column(var = "Parameter")
     names(diagList)[i] <- modelsToRun[i]
@@ -555,7 +776,7 @@ getBycatchSim <- function(mod1,
       bvals<-matrix(rnorm(prod(nsim,(ncol(matrixAll)-1)),0,priors$coefficientSD),nsim,(ncol(matrixAll)-1))
     if(priors$phiType=="normal") 
       phivals=truncnorm::rtruncnorm(nsim, a=0, b=Inf, mean = 0, sd = priors$phiPar) else
-    phivals<-rexp(nsim,priors$phiPar)
+        phivals<-rexp(nsim,priors$phiPar)
   }
   else {
     b0vals <- extract(mod1, pars = "b0")$b0
@@ -579,11 +800,11 @@ getBycatchSim <- function(mod1,
     Effort <- EffortMean
   }
   if(predictionInterval) {
-  simVal<-data.frame(SampleUnits=rep(logdat$SampleUnits,nsim),
-                     MeanVals=as.vector(simMean) * Effort,
-                     phiVals=rep(phivals, each = nrow(logdat))) %>%
-    rowwise() %>%
-    mutate(Bycatch=getMeanNbinom(SampleUnits,MeanVals,phiVals))
+    simVal<-data.frame(SampleUnits=rep(logdat$SampleUnits,nsim),
+                       MeanVals=as.vector(simMean) * Effort,
+                       phiVals=rep(phivals, each = nrow(logdat))) %>%
+      rowwise() %>%
+      mutate(Bycatch=getMeanNbinom(SampleUnits,MeanVals,phiVals))
   }  else {
     simVal<-data.frame(Bycatch=as.vector(simMean) * Effort)
   }
@@ -622,9 +843,9 @@ priorSimulation<-function(stanObj,
                      Chain=1,
                      Parameter=rep(coefs,each=nsim)) %>%
     rowwise() %>%
-    mutate(value=case_when(Parameter=="b0"~rnorm(1,0,priors$interceptSD),
-                           Parameter=="phi"~rexp(1),
-                           TRUE~rnorm(1,0,priors$coefficientSD)))
+    mutate(value=case_when(Parameter=="b0"~rnorm(1,0,priors),
+                           Parameter=="phi"~rexp(1,1),
+                           TRUE~rnorm(1,0,1)))
   return
 }
 
@@ -642,7 +863,7 @@ plotPriorPosterior<-function(stanObj) {
     labs(x="Parameter",y="Density",color="")
 }
 
-#Plot PPC
+
 plotPriorPosteriorSims<-function(stanSum,
                                  modelNum,
                                  stanObj,
@@ -689,7 +910,6 @@ plotPriorPosteriorSims<-function(stanSum,
   gridExtra::grid.arrange(g1,g2)
 }
 
-#PlLot residuals
 getResiduals<-function(stanSum,stanFit,modelNum,setupObj,nsim=1000,spNum=1) {
   require(rstan)
   require(DHARMa)

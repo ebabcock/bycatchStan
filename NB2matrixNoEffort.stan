@@ -2,6 +2,10 @@ data{
  int N;
  int Ncoef;
  int Y[N];
+ real interceptSD;
+ real coefficientSD;
+ int phiType;
+ real phiPar;
  vector[N] offset;
  matrix[N,Ncoef] xMatrix;
 }
@@ -19,9 +23,13 @@ transformed parameters{
   }
 }
 model{
-  b0~normal(0,10);
-  b~normal(0,1);
-  phi~normal(0,1);
+  b0~normal(0,interceptSD);
+  b~normal(0,coefficientSD);
+  if(phiType==1) {
+    phi~exponential(phiPar);
+  }  else  {
+    phi~normal(0,phiPar);
+  }
   Y~neg_binomial_2(mu,phi);
 }
 generated quantities {
