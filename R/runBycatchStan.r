@@ -49,7 +49,8 @@ BUMRun<-bycatchStanSim(setupObjBUM,
                                       coefficientSD=1,
                                       phiType=c("exponential","normal")[1],
                                       phiPar=1),
-                        outDir=getwd())
+                        outDir=getwd(),
+                        useCode=c("cmdstanr","rstan")[1])
 Sys.time()
 #Function prints to an rds file. You can read it in here.
 

@@ -12,7 +12,6 @@ library(ggsci)
 library(flextable)
 theme_set(theme_bw())
 
-#Function to get WAIC and LOOIC from one stan model object
 getIC <- function(mod1,useCode) {
   LL1 <- extract_log_lik(mod1, "LL")
   waicval <- waic(LL1)$estimates
@@ -399,14 +398,21 @@ bycatchStanSim <- function(setupObj,
                            modeledEffort = FALSE,
                            effortSD = NULL,
                            predictionInterval=TRUE,
-                           outDir = NULL) {
+                           outDir = NULL,
+                           useCode="cmdstanr") {
   if (is.null(effortSD) & modeledEffort)      stop("Must supply the name of the effortSD column if using estimated effort")
   if(all(is.na(numericVariables))) numericVariables<-NULL
-  require(rstan)
+  if(useCode=="rstan") require(rstan)
+  if(useCode=="cmdstanr") {
+    require(cmdstanr)
+    NB2matrixNoEffort <- cmdstan_model("NB2matrixNoEffort.stan")
+    NB2matrixNoEffort1 <- cmdstan_model("NB2matrixNoEffort1.stan")
+  }
+  if(!useCode %in% c("rstan","cmdstanr")) stop("Must specify rstan or cmdstanr")
   require(loo)
   options(mc.cores = parallel::detectCores())
   # To keep a compiled version of the code so you don't have to recompile
-  rstan_options(auto_write = TRUE)
+  if(useCode=="rstan") rstan_options(auto_write = TRUE)
   #Unpack setupObj
   obsdat<-logdat<-yearVar<-obsEffort<-logEffort<-obsCatch<-catchUnit<-catchType<-
     logNum<-sampleUnit<-factorVariables<-numericVariables<-EstimateBycatch<-
@@ -466,8 +472,13 @@ bycatchStanSim <- function(setupObj,
         Ncoef = ncol(modelTables[[i]]) - 1,
         offset = obsdat$Effort
       )
-      stanRun <- stan(file = "NB2matrixNoEffort1.stan", data = dataList,
-                      pars=c("b0","phi","LL"))
+      if(useCode=="rstan") {
+        stanRun <- stan(file = "NB2matrixNoEffort1.stan", data = dataList,
+                        pars=c("b0","phi","LL"))
+      }
+      if(useCode=="cmdstanr")  {
+        stanRun<-NB2matrixNoEffort1$fit(data=dataList)
+      }
     } else {
       dataList <- list(
         Y = obsdat[[obsCatch[spNum]]],
@@ -480,10 +491,15 @@ bycatchStanSim <- function(setupObj,
         phiType=ifelse(priors$phiType=="normal",2,1),
         phiPar=priors$phiPar
       )
-      stanRun <- stan(file = "NB2matrixNoEffort.stan", data = dataList,
-                      pars=c("b0","b","phi","LL"))
+      if(useCode=="rstan") {
+        stanRun <- stan(file = "NB2matrixNoEffort.stan", data = dataList,
+                        pars=c("b0","b","phi","LL"))
+      }
+      if(useCode=="cmdstanr")  {
+        stanRun<-NB2matrixNoEffort$fit(data=dataList)
+      }
     }
-    waicList[[i]] <- getIC(stanRun)
+    waicList[[i]] <- getIC(stanRun,useCode)
     names(waicList)[i] <- modelsToRun[i]
     modelYearSum[[i]] <- getBycatchSim(
       stanRun,
@@ -493,7 +509,7 @@ bycatchStanSim <- function(setupObj,
       effortSD = effortSD,
       priors =  priors,
       predictionInterval=predictionInterval,
-      
+      useCode=useCode
     )
     names(modelYearSum)[i] <- modelsToRun[i]
     if (modelsToRun[i] == "y~1")
