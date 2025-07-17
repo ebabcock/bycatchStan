@@ -93,7 +93,7 @@ mortalityStan <- function(mortData,
   modelTables <- list()
   matrixAll <- list()
   mortData <- rename(mortData, y = !!aliveColumn)
-  predData <- mutate(predData, y = 1)
+  if(!is.null(predData))predData <- mutate(predData, y = 1)
   for (i in 1:numMod) {
     mod1 <- lm(formula = formula(modelsToRun[i]), data = mortData)
     modelTables[[i]] <- model.matrix(mod1)
@@ -108,7 +108,8 @@ mortalityStan <- function(mortData,
     if(useCode=="cmdstanr") mod <- binomialModP
   }  else  {
     if(useCode=="rstan") mod <- stan_model(file = "R/binomial.stan")
-    if(useCode=="cmdstanr") mod <- binomialMod  }
+    if(useCode=="cmdstanr") mod <- binomialMod  
+    }
   for (i in 1:numMod) {
     if (predictP) {
       dataList <- list(
@@ -128,7 +129,8 @@ mortalityStan <- function(mortData,
       )
     }
     if(useCode=="rstan") stanRuns[[i]] <- sampling(mod, data = dataList)
-    if(useCode=="cmdstanr") stanRuns[[i]] <-mod$draws(data=dataList)
+    if(useCode=="cmdstanr") stanRuns[[i]] <-mod$sample(data=dataList,
+                                                       refresh=0)
     waicList[[i]] <- getIC(stanRuns[[i]],useCode)
     names(waicList)[i] <- modelsToRun[i]
     if(useCode=="rstan") diagList[[i]] <- data.frame(summary(stanRuns[[i]], pars = c("b"))$summary) %>%
@@ -138,7 +140,7 @@ mortalityStan <- function(mortData,
     names(diagList)[i] <- modelsToRun[i]
   }
   waictab <- bind_rows(waicList, .id = "Model") %>%
-    mutate(Dwaic = waic - min(waic), looic = Dlooic - min(looic))
+    mutate(Dwaic = waic - min(waic), Dlooic = looic - min(looic))
   diagTable <- bind_rows(diagList, .id = "Model")
   returnVal <- list(waictab = waictab,
                     diagTable = diagTable,
@@ -222,7 +224,9 @@ plotMortalityFunc <- function(modelyrSum1, Species) {
 #' @param StanOutDir Directory for output. NULL defaults to same directory as BycatchEstimator outputs
 #' @param useCode "stanr" or "cmdstanr"
 #'
-#' @returns Returns lists of inputs and outputs
+#' @returns Returns lists of all the inputs, as well as a model summary table with LOOIC and WAIC values
+#' and a vector with paths of the .rds files containing the individual model stan files, and a dataframe of 
+#' annual bycatch estimates suitable for plotting
 #' @export
 #'
 #' @examples
@@ -361,8 +365,9 @@ bycatchStanSim <- function(setupObj,
     if(useCode=="cmdstanr") diagList[[i]] <- stanRun$summary(variables = pars)
     names(diagList)[i] <- modelsToRun[i]
     stanRunFiles[i] <- paste0(dirVal,"/", sp, spNum, "run", i, "-", Sys.Date(), ".rds")
-    print(stanRunFiles[i])
-    saveRDS(stanRun, file = stanRunFiles[i])
+    #print(stanRunFiles[i])
+    if(useCode=="rstan") saveRDS(stanRun, file = stanRunFiles[i])
+    if(useCode=="cmdstanr") stanRun$save_object(file = stanRunFiles[i])
     rm("stanRun")
   }
   waictab <- bind_rows(waicList, .id = "Model") %>%
@@ -711,5 +716,59 @@ getConvergence<-function(stanObj,useCode) {
    temp<-stanObj$diagnostic_summary()
    print(temp)
  }
+}
+
+
+#Function to get mortality predictions 
+#' getMortPred
+#'
+#' @param logdat 
+#' @param mortPredDat 
+#' @param sp 
+#' @param mortMod 
+#' @param bycatchMod 
+#' @param codeName 
+#'
+#' @returns
+#' @export
+#'
+#' @examples
+getMortPred <- function(logdat,
+                        mortPredDat,
+                        sp,
+                        mortMod,
+                        bycatchMod,
+                        codeName) {
+  ggb <- extract(bycatchMod, pars = "StrataBycatch")$StrataBycatch %>%
+    reshape2::melt() %>%
+    as.data.frame() %>%
+    rename(row = Var2, StrataBycatch = value) %>%
+    mutate(Year = logdat$Year[row])
+  ggm <- extract(mortMod, pars = "strataProb")$strataProb %>%
+    reshape2::melt() %>%
+    as.data.frame() %>%
+    rename(row = Var2, strataProb = value) %>%
+    mutate(Year = mortPredDat$Year[row], Species = mortPredDat$Species[row]) %>%
+    filter(Species == sp) %>%
+    mutate(row = row - min(row) + 1)
+  gg1 <- left_join(ggb, ggm, by = c("Year", "row", "iterations"))
+  modelyrSum1 <- gg1 %>% group_by(Year, iterations) %>%
+    summarize(
+      Bycatch = sum(StrataBycatch),
+      Mortality = sum(StrataBycatch * strataProb)
+    ) %>%
+    ungroup() %>%
+    pivot_longer(Bycatch:Mortality,
+                 names_to = "Outcome",
+                 values_to = "Total") %>%
+    group_by(Year, Outcome) %>%
+    summarize(
+      mean = mean(Total),
+      se = sd(Total),
+      lower = quantile(Total, 0.025),
+      upper = quantile(Total, 0.975),
+      median = quantile(Total, 0.5)
+    )
+  modelyrSum1
 }
 

@@ -1,11 +1,10 @@
 printStanCode<-function() {
   
   #write out binomial stan model for survival/mortality. No predictions
-  write(
-    "data{
+write("data{
  int N;
  int Ncoef;
- array[N] real Y;
+ array[N] int Y;
  matrix[N,Ncoef] xMatrix;
 }
 parameters{
@@ -43,7 +42,7 @@ parameters{
  vector[Ncoef] b;
 }
 transformed parameters{
-  vector[N] logitmu;
+  vector[N]  logitmu;
   logitmu = xMatrix*b;
 }
 model{
@@ -70,8 +69,7 @@ generated quantities {
   
 #Write out the stan file for negative binomial with
 #no simulation of effort, includes priors
-  write(
-    "data{
+write("data{
  int N;
  int Ncoef;
  array[N] int Y;

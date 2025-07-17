@@ -1,4 +1,5 @@
 # install.packages("devtools")
+#devtools::install_github("ebabcock/BycatchEstimator")
 library(tidyverse)
 library(BycatchEstimator)
 library(MuMIn)
@@ -18,10 +19,11 @@ source("R/printStanCode.r")
 source("R/bycatchStan.r")
 
 ## Run example code from BycatchEstimator
-
+obsdat<-droplevels(LLSIM_BUM_Example_observer[LLSIM_BUM_Example_observer$Year>2010 &LLSIM_BUM_Example_observer$fleet==2,])
+logdat<-droplevels(LLSIM_BUM_Example_logbook[LLSIM_BUM_Example_logbook$Year>2010 & LLSIM_BUM_Example_logbook$fleet==2,])
 setupObjBUM<-bycatchSetup(
-  obsdat = droplevels(LLSIM_BUM_Example_observer[LLSIM_BUM_Example_observer$Year>2010 &LLSIM_BUM_Example_observer$fleet==2,]),
-  logdat = droplevels(LLSIM_BUM_Example_logbook[LLSIM_BUM_Example_logbook$Year>2010 & LLSIM_BUM_Example_logbook$fleet==2,]),
+  obsdat = obsdat,
+  logdat = logdat,
   yearVar = "Year",
   obsEffort = "hooks",
   logEffort = "hooks",
@@ -41,7 +43,7 @@ setupObjBUM<-bycatchSetup(
   reportType = "html"  
 )
 modelsToRun<-c("y~Year","y~1")
-useCode="rstan"
+useCode="cmdstanr"
 BUMRun<-bycatchStanSim(setupObjBUM,
                         modelsToRun=modelsToRun,
                         spNum=1,  #which species to run in input is multispecies
@@ -51,7 +53,7 @@ BUMRun<-bycatchStanSim(setupObjBUM,
                                       phiType=c("exponential","normal")[1],
                                       phiPar=1),
                         StanOutDir=NULL,  #Null to use base directory from SetupObj
-                        useCode=c("cmdstanr","rstan")[2])
+                        useCode=useCode)
 Sys.time()
 #Function prints to an rds file. You can read it in here.
 
@@ -63,7 +65,6 @@ BUMRun$waictab
 
 ##########################################################
 # Code to reload runs to look at diagnostics
-# Not needed if the objects are still in the environment
 #################################################
 #Specify directory with bycatch Estimator results
 #outDir<-setupObjBUM$bycatchInputs$outDir
@@ -126,4 +127,46 @@ getSummary(stanSum,
            spNum=1,
            useCode=useCode) 
 
+###### Code to run mortality model ##
+#With simulated survival data (arbitrary values)
+mortData<-read.csv("data/SimulatedMortality.csv")
+mortData<-standardizeToObsdat(obsdat,mortData,numericVariables="Year")
+#with no prediction
+MortResults<-mortalityStan(mortData=mortData,
+                          predData = NULL,
+                          modelsToRun=c("y~1","y~Species","y~Year","y~Year+Species","y~Year:Species"),
+                          aliveColumn="alive",
+                          outDir=getwd(),
+                          runName="Simulated",
+                          predictP=FALSE,  
+                          useCode=useCode  
+)
+MortResults$waictab
 
+### With predictions for each year for BUM
+predData<-standardizeToObsdat(obsdat,logdat,numericVariables = "Year")%>%
+  mutate(Species="BUM",
+         Species=factor("BUM",levels=c("BUM","SWO")))
+MortResults<-mortalityStan(mortData=mortData,
+                           predData = predData,
+                           modelsToRun=c("y~1","y~Species","y~Year","y~Year+Species","y~Year:Species"),
+                           aliveColumn="alive",
+                           outDir=getwd(),
+                           runName="Simulated",
+                           predictP=TRUE,  
+                           useCode=useCode  
+)
+
+MortResults$waictab
+MortResults$diagTable
+mortModelNum<-which(MortResults$waictab$Dwaic==0)
+
+## Combine mortality and bycatch estimate to get bycatch mortality
+# Not working yet
+mortalityEsts<-getMortPred(logdat=mutate(PredData,Year=originalYear),
+                        mortPredDat=mutate(PredData,Year=originalYear),
+                        sp="BUM",
+                        mortMod=mortResults$stanRuns[[mortModelNum]],
+                        bycatchMod= stanObj)
+plotMortalityFunc(turtleEsts,Species="Kemp's Ridley Sea Turtle")
+head(turtleEsts)

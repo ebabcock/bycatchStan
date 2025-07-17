@@ -1,7 +1,7 @@
 data{
  int N;
  int Ncoef;
- array[N] real Y;
+ array[N] int Y;
  matrix[N,Ncoef] xMatrix;
 }
 parameters{
